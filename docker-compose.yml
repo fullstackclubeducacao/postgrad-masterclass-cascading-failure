@@ -59,7 +59,8 @@ services:
     environment:
       DATABASE_URL: postgres://app:app@postgres:5432/shop
     deploy:
-      replicas: 1
+      # fix/scale-out: "falta capacidade" → 4 réplicas × pool de 15 = 60 conexões (o Postgres aceita 50).
+      replicas: 4
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
       interval: 3s

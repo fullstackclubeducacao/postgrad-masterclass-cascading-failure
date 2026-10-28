@@ -1,33 +1,28 @@
-# `main` — o ponto de partida
+# `fix/scale-out` — "falta capacidade, vamos escalar a API"
 
 ## Decisão
-Uma réplica da API, um único pool `pg` com **15 conexões**, `connectionTimeoutMillis: 0`
-(espera infinita por uma conexão) e **nenhum `statement_timeout`**. Todas as rotas usam o mesmo pool.
-Ver `api/src/pools.js`.
+Subir a API de 1 para **4 réplicas** (`deploy.replicas: 4` no `docker-compose.yml`).
+Cada réplica mantém o seu pool de 15 conexões. Nada mais mudou.
 
 ## Por que parece certa
-- São os defaults do `node-postgres`: "se o driver vem assim, deve estar bom".
-- 15 conexões sobram para ~100 req/s de queries de 1–2 ms.
-- O relatório de vendas é só **2% do tráfego**. Que mal ele pode fazer?
+- A latência explodiu e a API "não dá conta": escalar horizontalmente é o reflexo padrão.
+- Stateless, atrás de um balanceador — é para isso que serve.
+- 4× mais réplicas = 4× mais conexões = 4× mais relatórios em paralelo. Deve resolver.
 
 ## Efeito colateral esperado
-O relatório faz seq scan em ~3 milhões de pedidos e calcula `to_char()` em cada linha.
-Com 2 req/s de relatório e um banco de 2 vCPU, os relatórios chegam mais rápido do que terminam:
-eles se acumulam até ocupar **as 15 conexões do pool**. A partir daí toda requisição, inclusive
-`GET /products/:id` (1 ms de SQL), entra numa fila FIFO sem limite atrás de relatórios de 15+ s.
-A rota de 2% derruba as outras 98%.
+4 × 15 = **60 conexões possíveis** contra um Postgres com `max_connections = 50`
+(e 3 delas reservadas para superusuário). Sob carga os pools tentam crescer, o Postgres recusa:
+`FATAL: sorry, too many clients already`. Rotas que antes só esperavam agora **falham**, em
+todas as réplicas. E as conexões que existem estão ocupadas por **mais** relatórios simultâneos
+disputando as mesmas 2 vCPUs — cada relatório fica ainda mais lento.
+O gargalo nunca foi a API: era o banco. Escalar a API apenas o empurrou para o banco.
 
 ## Onde olhar no Grafana
-- **Painel 3** (o painel-chave): nas rotas rápidas o tracejado (fila do pool) dispara para dezenas de
-  segundos enquanto o sólido (SQL) continua em ~2 ms. O problema não é o banco ser lento para elas:
-  é a **fila**.
-- **Painel 4**: "ativas" cola no máximo (15) e "em espera" sobe sem parar.
-- **Painel 1**: p95 de `GET /products/:id` sai de ~1 ms para dezenas de segundos.
-- **Painel 2**: os erros só aparecem ~1–2 min depois, quando o cliente (timeout padrão de 60 s do k6)
-  desiste. Espera infinita não falha — só fica pendurada.
-- **Painel 5**: o Postgres nem está cheio (~17 de 50). O gargalo é o pool, não o `max_connections`.
+- **Painel 5**: conexões do Postgres batem na linha de `max_connections`.
+- **Painel 2**: taxa de erro sobe já no primeiro minuto (na `main` o primeiro erro levava ~2 min).
+- **Painel 4**: a soma dos pools (4 réplicas) passa de 15 para o limite do banco.
+- `make logs` → `sorry, too many clients already`.
 
-## Próximas decisões possíveis
-- "Falta capacidade, vamos escalar a API" → `fix/scale-out`
-- "Os clientes devem tentar de novo" → `fix/retry`
-- "Falhar rápido" → `fix/timeouts`
+## Lição
+Escalar um componente stateless na frente de um recurso compartilhado e finito multiplica a
+pressão sobre esse recurso. Pool size × réplicas precisa caber no banco.
