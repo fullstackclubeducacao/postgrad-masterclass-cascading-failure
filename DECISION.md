@@ -1,30 +1,31 @@
-# `fix/bulkhead` — "isolar o relatório"
+# `fix/index` — "tratar a causa: a query"
 
 ## Decisão
-Dois pools em `api/src/pools.js`, com os mesmos timeouts de `fix/timeouts`:
-- `transactional` (**12 conexões**): `GET /products/:id`, `POST /orders`, `GET /orders/:id`;
-- `reports` (**3 conexões**): `GET /reports/sales`.
+Em `db/branch.sql` (aplicado automaticamente pelo serviço `migrate`):
+1. índice em `orders (created_at)`;
+2. índice *covering* em `order_items (order_id) INCLUDE (quantity, price_cents)`.
 
-O total continua 15: nenhuma conexão a mais no banco.
+E em `api/src/routes.js`, a query do relatório deixa de aplicar `to_char()` em `created_at` no
+`WHERE`: os limites do período é que são convertidos para o fuso de São Paulo, e o filtro vira um
+intervalo sobre a coluna. Sem isso o índice do item 1 **não seria usado**.
 
-## Por que parece certa
-- Em `fix/timeouts` o relatório ainda compete pelo mesmo pool: a proteção depende de uma
-  conta (taxa do relatório × 2 s < 15) que qualquer pico de relatório quebra.
-- Bulkhead (compartimentos estanques de um navio): um vazamento inunda um compartimento, não o navio.
-- O relatório é a carga de risco; o checkout é a carga que paga as contas.
+Os timeouts e o bulkhead das branches anteriores continuam lá.
+
+## Por que parece certa (e desta vez é)
+- O relatório não é lento por falta de conexões ou de réplicas: ele lê 3 milhões de linhas para
+  devolver 7 dias. Com o índice ele lê só as ~58 mil do período, e o join lê só o índice de
+  `order_items`.
+- O índice muda o custo do relatório de ~1 s de CPU isolado (15+ s sob carga) para ~0,1 s.
 
 ## Efeito colateral esperado
-O relatório fica limitado a 3 execuções simultâneas: com 2 req/s, parte dos pedidos estoura a fila
-do pool `reports` (1 s) e recebe 503 rápido; os que entram disputam menos CPU e uma parte termina
-antes dos 2 s. O relatório continua falhando em boa parte das vezes.
-As rotas transacionais ficam **saudáveis**: erro ≈ 0, mesmo se a taxa do relatório subir.
-A falha ficou **confinada**, mas não resolvida: o relatório ainda não funciona.
+Nenhum visível na demo: todas as rotas saudáveis com a mesma carga. Os custos reais ficam fora do
+gráfico: escrita um pouco mais cara em `orders`/`order_items` (mais índices para manter), espaço em
+disco, e o risco de alguém "otimizar" a query de volta para `to_char(created_at)`.
+Os timeouts e o bulkhead **continuam necessários**: são eles que protegem o sistema da próxima
+query lenta que ainda não conhecemos.
 
 ## Onde olhar no Grafana
-- **Painel 4**: pool `reports` cheio (3/3) e com fila; pool `transactional` folgado.
-- **Painel 2**: erro só em `GET /reports/sales`.
-- **Painel 3**: rotas transacionais sem espera no pool.
-- Experimento ao vivo: `RATE_REPORT=8 make load` aqui e em `fix/timeouts` (ver README).
-
-## Próxima decisão
-Parar de tratar o sintoma: o relatório é lento porque a query faz seq scan → `fix/index`.
+- **Painel 1**: p95 do relatório < 200 ms; rotas rápidas no baseline.
+- **Painel 2**: erro ≈ 0 em todas as rotas.
+- **Painel 4**: pool `reports` com folga; fila vazia.
+- **Painel 5**: poucas conexões ativas no Postgres.

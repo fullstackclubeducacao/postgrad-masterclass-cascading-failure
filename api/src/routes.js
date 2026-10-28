@@ -57,9 +57,10 @@ export async function routes(app) {
     return reply.code(201).send(order)
   })
 
-  // Relatório de vendas por dia (no fuso de São Paulo). O filtro aplica função
-  // sobre created_at — além de não haver índice, o predicado não é "sargable":
-  // o Postgres precisa calcular to_char() para cada uma das ~3 milhões de linhas.
+  // Relatório de vendas por dia (no fuso de São Paulo).
+  // fix/index: só criar o índice não basta — com to_char(created_at) no WHERE o Postgres
+  // não consegue usá-lo. O filtro agora é um intervalo sobre a coluna "crua"
+  // (convertemos os limites, não as 3 milhões de linhas), e o índice resolve.
   app.get('/reports/sales', async (req, reply) => {
     const { from, to } = req.query
     if (!DATE.test(from ?? '') || !DATE.test(to ?? '')) {
@@ -72,7 +73,8 @@ export async function routes(app) {
                 sum(oi.quantity * oi.price_cents) AS revenue_cents
            FROM orders o
            JOIN order_items oi ON oi.order_id = o.id
-          WHERE to_char(o.created_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') BETWEEN $1 AND $2
+          WHERE o.created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo'
+            AND o.created_at <  ($2::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo'
           GROUP BY 1
           ORDER BY 1`,
         [from, to],
