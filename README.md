@@ -11,6 +11,8 @@ main ──┬── fix/scale-out      (4 réplicas: piora)
            (falhar rápido)  (isolar)        (tratar a causa)
 ```
 
+**Roteiro cronometrado da aula (60 min):** [`ROTEIRO-AULA.md`](ROTEIRO-AULA.md).
+
 ## O que tem aqui
 
 | Peça | Detalhe |
