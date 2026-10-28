@@ -13,7 +13,7 @@ up:
 ## Roda a carga do k6 (baseline -> relatório entra -> carga sustentada).
 load:
 	@# Recria a API para cada execução começar do zero (sem fila nem conexões da rodada anterior).
-	$(COMPOSE) up -d --wait --force-recreate --no-deps api
+	$(COMPOSE) up -d --build --wait --force-recreate --no-deps api
 	$(COMPOSE) --profile load run --rm k6
 
 ## Recria o banco do zero (apaga o volume e refaz o seed: ~2 min).

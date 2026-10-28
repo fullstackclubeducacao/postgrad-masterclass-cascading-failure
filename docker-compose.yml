@@ -21,10 +21,15 @@ services:
       - jit=off
       - -c
       - track_activity_query_size=2048
+      # Custo de I/O aleatório de SSD (o default 4.0 é de disco giratório).
+      - -c
+      - random_page_cost=1.1
       # Se a API morrer/for recriada, o Postgres aborta as queries órfãs em vez de terminá-las.
       - -c
       - client_connection_check_interval=2s
     cpus: ${PG_CPUS:-2}
+    # O default do Docker (64 MB) faz VACUUM/hash joins grandes falharem com "No space left on device".
+    shm_size: 512mb
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -101,6 +106,14 @@ services:
     env_file: .env
     environment:
       BASE_URL: http://api:3000
+      # Variáveis do shell têm precedência sobre o .env: `RATE_REPORT=8 make load`
+      RATE_PRODUCTS: ${RATE_PRODUCTS:-60}
+      RATE_CREATE_ORDER: ${RATE_CREATE_ORDER:-25}
+      RATE_GET_ORDER: ${RATE_GET_ORDER:-13}
+      RATE_REPORT: ${RATE_REPORT:-2}
+      BASELINE_DURATION: ${BASELINE_DURATION:-30s}
+      LOAD_DURATION: ${LOAD_DURATION:-150s}
+      MAX_VUS: ${MAX_VUS:-3000}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_PUSH_INTERVAL: 5s
       K6_PROMETHEUS_RW_TREND_STATS: p(95),avg
