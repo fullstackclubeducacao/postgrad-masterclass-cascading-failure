@@ -1024,7 +1024,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(k6_target_rps)",
+          "expr": "sum(k6_target_rps) and on() (sum(rate(k6_requests_sent_total[$__rate_interval])) > 0)",
           "legendFormat": "configurada",
           "refId": "B",
           "range": true

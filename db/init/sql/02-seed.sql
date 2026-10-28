@@ -1,5 +1,5 @@
--- Seed com generate_series. Volume calibrado para o relatório levar 2–5 s
--- (seq scan em `orders`) num notebook comum.
+-- Seed com generate_series. Com 3M pedidos o relatório da main (seq scan + to_char() por linha)
+-- leva ~1 s isolado num Mac Apple Silicon, ~2 s num notebook modesto e 10+ s sob a carga da demo.
 \connect shop
 SET ROLE app;
 SET synchronous_commit = off;

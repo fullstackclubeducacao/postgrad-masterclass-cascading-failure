@@ -42,7 +42,7 @@ make reset     # cria o banco do zero e faz o seed (~2 min)
 | Comando | O que faz |
 |---|---|
 | `make up` | sobe/atualiza a stack da branch atual e aplica `db/branch.sql` (índices da branch) |
-| `make load` | recria a API (zera filas) e roda o k6 (~3 min). Taxas no `.env` ou no shell: `RATE_REPORT=8 make load` |
+| `make load` | aplica `db/branch.sql`, recria a API (zera filas) e roda o k6 (~3,5 min). Taxas no `.env` ou no shell: `RATE_REPORT=8 make load` |
 | `make reset` | apaga o volume e recria o banco do zero (~2 min) |
 | `make logs` | logs da API e do Postgres |
 | `make who` | roda `scripts/who-holds-connections.sql`: quem está segurando conexões agora |
@@ -56,7 +56,7 @@ Grafana: <http://localhost:3000> (modo projetor: <http://localhost:3000/d/cascad
 |---|---|---|
 | topo | p95 products · fila do pool · erro do cliente · conexões no Postgres | números grandes para o projetor |
 | 1 | Latência p95 por rota (escala log) | a degradação de **todas** as rotas |
-| 2 | Taxa de erro por rota, vista pelo **cliente** (5xx + timeouts do k6) | quem falha, e quando |
+| 2 | Taxa de erro por rota, vista pelo **cliente** (5xx + timeouts do k6; na `fix/retry`, por tentativa) | quem falha, e quando |
 | 3 | **Fila do pool (tracejado) vs SQL (sólido), por rota** | **o painel-chave**: separa "o banco está lento" de "estou esperando conexão" |
 | 4 | Pool: ativas / ociosas / máximo / em espera (eixo direito) | o pool cheio e a fila crescendo |
 | 5 | Conexões do Postgres por estado vs `max_connections` | o limite do banco (scale-out) |

@@ -46,8 +46,11 @@ test('measures pool wait and query time separately, per route, and releases the 
 
 test('a SQL error returns the connection to the pool; a broken connection is discarded', async () => {
   const pool = fakePool('main')
-  const sqlError = Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' })
-  const brokenConnection = new Error('Connection terminated unexpectedly')
+  const sqlError = Object.assign(new Error('canceling statement due to statement timeout'), {
+    code: '57014',
+    severity: 'ERROR',
+  })
+  const brokenConnection = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
 
   await assert.rejects(withConnection(pool, 'GET /y', async () => { throw sqlError }), sqlError)
   await assert.rejects(withConnection(pool, 'GET /y', async () => { throw brokenConnection }), brokenConnection)
