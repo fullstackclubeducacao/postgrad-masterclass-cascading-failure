@@ -2,20 +2,21 @@ import pg from 'pg'
 import { observePool } from './metrics.js'
 
 // ─── A DECISÃO DESTA BRANCH ────────────────────────────────────────────────
-// fix/timeouts: limites explícitos. No máximo 1 s esperando uma conexão do pool
-// e no máximo 2 s de SQL. Passou disso, 503 imediato (ver errors.js).
+// fix/bulkhead: os mesmos limites de fix/timeouts, mas o relatório ganha um pool
+// SÓ DELE (3 conexões). As rotas transacionais ficam com as outras 12.
+// Mesmas 15 conexões no total: não pedimos nada a mais para o banco.
 // ──────────────────────────────────────────────────────────────────────────
-const main = createPool('main', {
-  max: 15,
+const limits = {
   connectionTimeoutMillis: 1000,
   statement_timeout: 2000,
-})
+}
+const transactional = createPool('transactional', { max: 12, ...limits })
+const reports = createPool('reports', { max: 3, ...limits })
 
-// Todas as rotas usam o mesmo pool.
 export const pools = {
-  products: main,
-  orders: main,
-  reports: main,
+  products: transactional,
+  orders: transactional,
+  reports,
 }
 
 function createPool(name, options) {

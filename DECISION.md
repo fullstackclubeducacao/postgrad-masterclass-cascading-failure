@@ -1,28 +1,30 @@
-# `fix/timeouts` — "falhar rápido"
+# `fix/bulkhead` — "isolar o relatório"
 
 ## Decisão
-Limites explícitos em `api/src/pools.js`:
-- `connectionTimeoutMillis: 1000`: no máximo **1 s** na fila do pool;
-- `statement_timeout: 2000`: o Postgres cancela qualquer SQL que passe de **2 s**;
-- em `api/src/errors.js`, os dois casos viram **503 imediato** (em vez de 500 ou de uma requisição pendurada).
+Dois pools em `api/src/pools.js`, com os mesmos timeouts de `fix/timeouts`:
+- `transactional` (**12 conexões**): `GET /products/:id`, `POST /orders`, `GET /orders/:id`;
+- `reports` (**3 conexões**): `GET /reports/sales`.
+
+O total continua 15: nenhuma conexão a mais no banco.
 
 ## Por que parece certa
-- Uma requisição que espera 60 s não ajuda ninguém: o cliente já foi embora.
-- Cancelar o SQL devolve a conexão ao pool; falhar na fila evita que ela cresça sem limite.
-- 503 é honesto: "estou sobrecarregado, tente depois".
+- Em `fix/timeouts` o relatório ainda compete pelo mesmo pool: a proteção depende de uma
+  conta (taxa do relatório × 2 s < 15) que qualquer pico de relatório quebra.
+- Bulkhead (compartimentos estanques de um navio): um vazamento inunda um compartimento, não o navio.
+- O relatório é a carga de risco; o checkout é a carga que paga as contas.
 
 ## Efeito colateral esperado
-O relatório leva bem mais que 2 s sob carga → é **cancelado sempre** → o relatório passa a
-falhar 100% (antes ele era lento, agora não funciona). Em compensação cada relatório segura uma
-conexão por no máximo 2 s, então os relatórios não conseguem mais ocupar o pool inteiro:
-as rotas rápidas **sobrevivem**, com latência limitada. Ainda há espera no pool (as conexões
-continuam compartilhadas) e o banco continua gastando CPU com relatórios que serão cancelados.
+O relatório fica limitado a 3 execuções simultâneas: com 2 req/s, parte dos pedidos estoura a fila
+do pool `reports` (1 s) e recebe 503 rápido; os que entram disputam menos CPU e uma parte termina
+antes dos 2 s. O relatório continua falhando em boa parte das vezes.
+As rotas transacionais ficam **saudáveis**: erro ≈ 0, mesmo se a taxa do relatório subir.
+A falha ficou **confinada**, mas não resolvida: o relatório ainda não funciona.
 
 ## Onde olhar no Grafana
-- **Painel 1**: p95 de `GET /products/:id` fica na casa das centenas de ms, não dezenas de segundos.
-- **Painel 2**: erros concentrados em `GET /reports/sales`.
-- **Painel 3**: SQL do relatório "achatado" em ~2 s (o `statement_timeout`).
-- **Painel 4**: "em espera" limitado.
+- **Painel 4**: pool `reports` cheio (3/3) e com fila; pool `transactional` folgado.
+- **Painel 2**: erro só em `GET /reports/sales`.
+- **Painel 3**: rotas transacionais sem espera no pool.
+- Experimento ao vivo: `RATE_REPORT=8 make load` aqui e em `fix/timeouts` (ver README).
 
 ## Próxima decisão
-O relatório ainda divide o pool com as rotas transacionais → `fix/bulkhead`.
+Parar de tratar o sintoma: o relatório é lento porque a query faz seq scan → `fix/index`.
