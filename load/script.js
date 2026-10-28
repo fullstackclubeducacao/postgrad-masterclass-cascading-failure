@@ -56,11 +56,22 @@ export const options = {
   },
 }
 
-// Toda requisição passa por aqui. Na main: uma tentativa, timeout padrão do k6 (60 s).
+// ─── A DECISÃO DESTA BRANCH (fix/retry) ────────────────────────────────────
+// Os clientes desistem depois de 3 s e tentam de novo, imediatamente, até 3 vezes.
+// "Falhas transitórias se resolvem com retry."
+const CLIENT_TIMEOUT = '3s'
+const MAX_RETRIES = 3
+
 function send(request) {
-  requestsSent.add(1)
-  return request({})
+  let res
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    requestsSent.add(1)
+    res = request({ timeout: CLIENT_TIMEOUT })
+    if (res.status !== 0 && res.status < 500) return res // sucesso (ou erro do cliente): não repete
+  }
+  return res
 }
+// ──────────────────────────────────────────────────────────────────────────
 
 const json = { headers: { 'Content-Type': 'application/json' } }
 const rand = (min, max) => min + Math.floor(Math.random() * (max - min + 1))

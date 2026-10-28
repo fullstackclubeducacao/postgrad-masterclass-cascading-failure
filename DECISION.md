@@ -1,33 +1,26 @@
-# `main` — o ponto de partida
+# `fix/retry` — "os clientes devem tentar de novo"
 
 ## Decisão
-Uma réplica da API, um único pool `pg` com **15 conexões**, `connectionTimeoutMillis: 0`
-(espera infinita por uma conexão) e **nenhum `statement_timeout`**. Todas as rotas usam o mesmo pool.
-Ver `api/src/pools.js`.
+Os clientes (simulados no k6, `load/script.js`) passam a ter **timeout de 3 s** e, em caso de
+timeout ou 5xx, fazem **até 3 retries imediatos**. A API e o banco são os mesmos da `main`.
 
 ## Por que parece certa
-- São os defaults do `node-postgres`: "se o driver vem assim, deve estar bom".
-- 15 conexões sobram para ~100 req/s de queries de 1–2 ms.
-- O relatório de vendas é só **2% do tráfego**. Que mal ele pode fazer?
+- "Falhas são transitórias": retry é a primeira coisa que qualquer SDK/HTTP client oferece.
+- Timeout de 3 s parece até conservador para uma API de catálogo.
+- Cada tentativa individual tem mais chance de pegar a API num momento bom.
 
 ## Efeito colateral esperado
-O relatório faz seq scan em ~3 milhões de pedidos e calcula `to_char()` em cada linha.
-Com 2 req/s de relatório e um banco de 2 vCPU, os relatórios chegam mais rápido do que terminam:
-eles se acumulam até ocupar **as 15 conexões do pool**. A partir daí toda requisição, inclusive
-`GET /products/:id` (1 ms de SQL), entra numa fila FIFO sem limite atrás de relatórios de 15+ s.
-A rota de 2% derruba as outras 98%.
+Quando a latência passa de 3 s (o que na `main` acontece ~20 s depois que o relatório entra),
+**toda** requisição estoura o timeout e vira até 4 requisições. A carga oferecida ao sistema
+mais que dobra — exatamente quando ele está mais fraco. E o servidor não sabe que o cliente
+desistiu: as requisições abandonadas continuam na fila do pool, ocupando o lugar das novas.
+É uma **tempestade de retries**: o sistema colapsa mais cedo e não se recupera enquanto a carga dura.
 
 ## Onde olhar no Grafana
-- **Painel 3** (o painel-chave): nas rotas rápidas o tracejado (fila do pool) dispara para dezenas de
-  segundos enquanto o sólido (SQL) continua em ~2 ms. O problema não é o banco ser lento para elas:
-  é a **fila**.
-- **Painel 4**: "ativas" cola no máximo (15) e "em espera" sobe sem parar.
-- **Painel 1**: p95 de `GET /products/:id` sai de ~1 ms para dezenas de segundos.
-- **Painel 2**: os erros só aparecem ~1–2 min depois, quando o cliente (timeout padrão de 60 s do k6)
-  desiste. Espera infinita não falha — só fica pendurada.
-- **Painel 5**: o Postgres nem está cheio (~17 de 50). O gargalo é o pool, não o `max_connections`.
+- **Painel 6**: "enviadas (inclui retries)" descola da linha "configurada" e passa de **2×**.
+- **Painel 4**: "em espera" cresce bem mais rápido que na `main`.
+- **Painel 2**: 100% de erro, também nas rotas rápidas, bem antes do que na `main`.
 
-## Próximas decisões possíveis
-- "Falta capacidade, vamos escalar a API" → `fix/scale-out`
-- "Os clientes devem tentar de novo" → `fix/retry`
-- "Falhar rápido" → `fix/timeouts`
+## Lição
+Retry sem backoff, sem jitter, sem orçamento (retry budget) e sem circuit breaker é amplificação
+de carga. Na pior hora possível.
