@@ -4,7 +4,7 @@ export const registry = new client.Registry()
 client.collectDefaultMetrics({ register: registry })
 
 // Buckets vão de 1 ms a 2 min: precisamos enxergar tanto o baseline (ms) quanto a fila infinita (dezenas de s).
-const buckets = [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 5, 10, 20, 30, 60, 120]
+const buckets = [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2, 3, 5, 10, 20, 30, 60, 120]
 
 export const httpDuration = new client.Histogram({
   name: 'http_request_duration_seconds',
