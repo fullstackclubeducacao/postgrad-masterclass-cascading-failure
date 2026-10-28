@@ -2,13 +2,13 @@ import pg from 'pg'
 import { observePool } from './metrics.js'
 
 // ─── A DECISÃO DESTA BRANCH ────────────────────────────────────────────────
-// main: um único pool de 15 conexões, espera infinita pela conexão
-// (connectionTimeoutMillis: 0) e nenhum statement_timeout.
-// "Os defaults do driver devem estar bons."
+// fix/timeouts: limites explícitos. No máximo 1 s esperando uma conexão do pool
+// e no máximo 2 s de SQL. Passou disso, 503 imediato (ver errors.js).
 // ──────────────────────────────────────────────────────────────────────────
 const main = createPool('main', {
   max: 15,
-  connectionTimeoutMillis: 0,
+  connectionTimeoutMillis: 1000,
+  statement_timeout: 2000,
 })
 
 // Todas as rotas usam o mesmo pool.
