@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Service discovery pelo DNS do Docker: "api" resolve para todas as réplicas.
+  - job_name: api
+    dns_sd_configs:
+      - names: [api]
+        type: A
+        port: 3000
+        refresh_interval: 5s
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]

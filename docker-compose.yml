@@ -1,0 +1,112 @@
+name: cascading-failure-lab
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      SEED_ORDERS: ${SEED_ORDERS:-3000000}
+      SEED_PADDING: ${SEED_PADDING:-2}
+    command:
+      - postgres
+      - -c
+      - max_connections=50
+      - -c
+      - shared_buffers=256MB
+      # Sem paralelismo e sem JIT: cada relatório usa exatamente 1 backend/1 CPU.
+      # Deixa o comportamento previsível de um notebook para outro.
+      - -c
+      - max_parallel_workers_per_gather=0
+      - -c
+      - jit=off
+      - -c
+      - track_activity_query_size=2048
+      # Se a API morrer/for recriada, o Postgres aborta as queries órfãs em vez de terminá-las.
+      - -c
+      - client_connection_check_interval=2s
+    cpus: ${PG_CPUS:-2}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP de propósito: durante o seed o Postgres só escuta no socket local.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "app", "-d", "shop"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 300s
+
+  # Aplica o estado de schema da branch atual (db/branch.sql) e termina.
+  migrate:
+    image: postgres:16.4-alpine
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PGPASSWORD: app
+    volumes:
+      - ./db/branch.sql:/branch.sql:ro
+    command: ["psql", "-v", "ON_ERROR_STOP=1", "-h", "postgres", "-U", "app", "-d", "shop", "-f", "/branch.sql"]
+
+  api:
+    build: ./api
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/shop
+    deploy:
+      replicas: 1
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DATA_SOURCE_NAME: postgresql://postgres:postgres@postgres:5432/shop?sslmode=disable
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    depends_on: [prometheus]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/cascade.json
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: [load]
+    env_file: .env
+    environment:
+      BASE_URL: http://api:3000
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: 5s
+      K6_PROMETHEUS_RW_TREND_STATS: p(95),avg
+    volumes:
+      - ./load:/scripts:ro
+    command: ["run", "--quiet", "--out", "experimental-prometheus-rw", "/scripts/script.js"]
+
+volumes:
+  pgdata:
