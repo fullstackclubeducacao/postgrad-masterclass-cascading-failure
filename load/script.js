@@ -3,12 +3,12 @@
 // o gerador desaceleraria junto com o sistema e esconderia a cascata.
 import http from 'k6/http'
 import { check } from 'k6'
-import { Gauge } from 'k6/metrics'
+import { Counter, Gauge } from 'k6/metrics'
 
 const BASE = __ENV.BASE_URL || 'http://api:3000'
 const BASELINE = __ENV.BASELINE_DURATION || '30s'
 const LOAD = __ENV.LOAD_DURATION || '150s'
-const MAX_VUS = Number(__ENV.MAX_VUS || 3000)
+const MAX_VUS = Number(__ENV.MAX_VUS || 4000)
 const TOTAL = `${seconds(BASELINE) + seconds(LOAD)}s`
 
 const RATES = {
@@ -20,6 +20,9 @@ const RATES = {
 
 // Taxa configurada, publicada como métrica para o painel 6 comparar com o que foi enviado.
 const targetRps = new Gauge('target_rps')
+// Conta cada requisição no momento do ENVIO (http_reqs só conta quando a resposta chega,
+// o que esconde as requisições penduradas). Também conta cada retry.
+const requestsSent = new Counter('requests_sent')
 
 function scenario(exec, rate, route, extra = {}) {
   return {
@@ -53,12 +56,19 @@ export const options = {
   },
 }
 
+// Toda requisição passa por aqui. Na main: uma tentativa, timeout padrão do k6 (60 s).
+function send(request) {
+  requestsSent.add(1)
+  return request({})
+}
+
 const json = { headers: { 'Content-Type': 'application/json' } }
 const rand = (min, max) => min + Math.floor(Math.random() * (max - min + 1))
 
 export function getProduct() {
   targetRps.add(RATES.products)
-  const res = http.get(`${BASE}/products/${rand(1, 10000)}`, { tags: { name: 'GET /products/:id' } })
+  const id = rand(1, 10000)
+  const res = send((p) => http.get(`${BASE}/products/${id}`, { ...p, tags: { name: 'GET /products/:id' } }))
   check(res, { ok: (r) => r.status === 200 })
 }
 
@@ -66,13 +76,14 @@ export function createOrder() {
   targetRps.add(RATES.createOrder)
   const items = [1, 2, 3].map(() => ({ productId: rand(1, 10000), quantity: rand(1, 5) }))
   const body = JSON.stringify({ customerId: rand(1, 200000), items })
-  const res = http.post(`${BASE}/orders`, body, { ...json, tags: { name: 'POST /orders' } })
+  const res = send((p) => http.post(`${BASE}/orders`, body, { ...json, ...p, tags: { name: 'POST /orders' } }))
   check(res, { created: (r) => r.status === 201 })
 }
 
 export function getOrder() {
   targetRps.add(RATES.getOrder)
-  const res = http.get(`${BASE}/orders/${rand(1, 3000000)}`, { tags: { name: 'GET /orders/:id' } })
+  const id = rand(1, 3000000)
+  const res = send((p) => http.get(`${BASE}/orders/${id}`, { ...p, tags: { name: 'GET /orders/:id' } }))
   check(res, { ok: (r) => r.status === 200 })
 }
 
@@ -82,9 +93,8 @@ export function salesReport() {
   const start = new Date(Date.UTC(2025, 0, 1) + rand(0, 350) * 86400000)
   const end = new Date(start.getTime() + 6 * 86400000)
   const day = (d) => d.toISOString().slice(0, 10)
-  const res = http.get(`${BASE}/reports/sales?from=${day(start)}&to=${day(end)}`, {
-    tags: { name: 'GET /reports/sales' },
-  })
+  const url = `${BASE}/reports/sales?from=${day(start)}&to=${day(end)}`
+  const res = send((p) => http.get(url, { ...p, tags: { name: 'GET /reports/sales' } }))
   check(res, { ok: (r) => r.status === 200 })
 }
 
